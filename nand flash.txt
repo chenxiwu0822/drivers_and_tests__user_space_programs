@@ -1,0 +1,168 @@
+﻿1. 从硬件上认识NAND FLASH：
+a. 原理图上只有data0~data7
+   那么地址线、数据线肯定是复用的
+b. nand flash K9F2G08容量为256M x 8 bit
+   它的地址位应该有28位，原理图上只有data0~data7，
+   所以需要发出多次地址信号
+c. nand flash不能像内存一样直接读写，
+   要先发出命令、再发地址、再读写数据
+d. CLE = 1, data0~data7上传输的是命令
+   ALE = 1, data0~data7上传输的是地址
+   CLE/ALE都是0, data0~data7上传输的是数据, nWE = 0, 表示写; 
+
+怎么操作呢：
+                          nand flash    /   s3c6410
+1. 发出片选信号:             nCE          CSn2_NAND/xm0csn[2]
+
+
+
+2. 发出命令:         
+   先把数据驱动到DATA0~7   
+   让"命令锁存信号"输出1     CLE             FCLE
+   让"写使能信号"从0变为1    nWE             FWEn       
+
+对于6410，把命令写到NFCMD寄存器
+
+3. 发出地址:         
+   先把A0~A7驱动到DATA0~7   
+   让"地址锁存信号"输出1     ALE             FALE
+   让"写使能信号"从0变为1    nWE             FWEn       
+
+对于6410，把地址写到NFADDR寄存器
+
+   再把A8~A11,驱动到DATA0~3, DATA4~7为0   
+   让"地址锁存信号"输出1     ALE             FALE
+   让"写使能信号"从0变为1    nWE             FWEn       
+对于6410，把地址写到NFADDR寄存器
+
+   再把A12~A19,驱动到DATA0~7   
+   让"地址锁存信号"输出1     ALE             FALE
+   让"写使能信号"从0变为1    nWE             FWEn         
+对于6410，把地址写到NFADDR寄存器
+
+   再把A20~A27,驱动到DATA0~7   
+   让"地址锁存信号"输出1     ALE             FALE
+   让"写使能信号"从0变为1    nWE             FWEn         
+对于6410，把地址写到NFADDR寄存器
+
+   再把A28,驱动到DATA0, DATA1~7为0   
+   让"地址锁存信号"输出1     ALE             FALE
+   让"写使能信号"从0变为1    nWE             FWEn            
+对于6410，把地址写到NFADDR寄存器
+
+4. 发出数据
+   先把数据驱动到DATA0~7   
+   让"命令锁存信号"输出0     CLE             FCLE
+   让"地址锁存信号"输出0     ALE             FALE
+   让"写使能信号"从0变为1    nWE             FWEn       
+对于6410，把数据写到NFDATA寄存器
+
+5. 读数据
+   让nRE输出0                 nRE             FREn
+   等待tREA
+   nand flash数据驱动到DATA0~7   
+   6410就可以读入数据       
+对于6410，读NFDATA寄存器
+
+
+用openjtag来体验nand flash的操作：
+1. 读ID：
+a. 初始化
+   设置MEM_SYS_CFG[1] = 0(0x7E00_F120), 让xm0csn[2]用作nand flash的片选信号
+   mdw 0x7E00F120
+   mww 0x7E00F120   0
+   
+   时间参数设置
+   mww 0x70200000 0x8000777e
+   
+b. 发出使能信号
+   NFCONT(0x70200004) [0]  = 1  /* 使能nand flash控制器 */
+   NFCONT(0x70200004) [1]  = 0  /* 让xm0csn[2]输出0 */
+   NFCONT(0x70200004) [16] = 0  /* soft lock */
+   
+   mdw 0x70200004   /* 0x100c6 */
+   mww 0x70200004  0xc5
+   
+c. 发出读ID命令
+   复位：把0xff写到NFCMMD(0x70200008)
+   把0x90写到NFCMMD(0x70200008)
+   
+   mwb 0x70200008 0xff
+   mwb 0x70200008 0x90
+   
+d. 发出地址0
+   把0写到NFADDR(0x7020000C)   
+   mwb 0x7020000C 0
+   
+e. 读数据
+   读NFDATA(0x70200010) 
+   mdb 0x70200010
+
+
+2. 读内容：
+a. 初始化
+   mww 0x7E00F120   0   /* 把xm0csn[2]配置为nand flash的片选信号 */
+   mww 0x70200000 0x8000777e   /* 设置时间参数 */
+b. 发出片选信号
+   mww 0x70200004  0xc5
+c. 发出复位信号
+   mwb 0x70200008 0xff
+d. 发出读命令
+   mwb 0x70200008 0
+e. 发出地址
+   mwb 0x7020000C 0
+   mwb 0x7020000C 0
+   mwb 0x7020000C 0
+   mwb 0x7020000C 0
+   mwb 0x7020000C 0
+f. 发出0x30命令
+   mwb 0x70200008 0x30
+g. 读数据
+   mdb 0x70200010   
+
+
+3. 擦除
+a. 初始化
+   mww 0x7E00F120   0   /* 把xm0csn[2]配置为nand flash的片选信号 */
+   mww 0x70200000 0x8000777e   /* 设置时间参数 */
+b. 选中
+   mww 0x70200004  0xc5
+c. 发出命令0x60
+   mwb 0x70200008 0x60
+d. 发出地址
+   mwb 0x7020000C 64
+   mwb 0x7020000C 0
+   mwb 0x7020000C 0
+e. 发出命令0xd0
+   mwb 0x70200008 0xd0
+
+
+4. 写入"abcd"
+a. 初始化
+   mww 0x7E00F120   0   /* 把xm0csn[2]配置为nand flash的片选信号 */
+   mww 0x70200000 0x8000777e   /* 设置时间参数 */
+b. 选中
+   mww 0x70200004  0xc5
+c. 发出命令0x80
+   mwb 0x70200008 0x80
+d. 发出地址
+   mwb 0x7020000C 0
+   mwb 0x7020000C 0
+   mwb 0x7020000C 0x40
+   mwb 0x7020000C 0
+   mwb 0x7020000C 0
+e. 发出数据
+   mwb 0x70200010 0x61
+   mwb 0x70200010 0x62
+   mwb 0x70200010 0x63
+   mwb 0x70200010 0x64
+f. 发出命令0x10   
+   mwb 0x70200008 0x10
+
+
+Base + 0x00 R/W 0xX000_100X NFCONF Configuration register
+Base + 0x04 R/W 0x0001_00C6 NFCONT Control register
+Base + 0x08 R/W 0x0000_0000 NFCMMD Command register
+Base + 0x0c R/W 0x0000_0000 NFADDR Address register
+
+Base = 0x7020_0000

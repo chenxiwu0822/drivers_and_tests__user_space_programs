@@ -1,0 +1,59 @@
+u-boot配置编译方法：
+1. make smdk6410_config
+2. chmod +x mkconfig
+3. Makefile 161行  : CROSS_COMPILE = arm-linux-
+4. make
+
+一、分析配置过程：make smdk6410_config
+顶层Makefile下有：
+smdk6410_config	:	unconfig
+	@$(MKCONFIG) $(@:_config=) arm s3c64xx smdk6410 samsung s3c6410 
+	./mkconfig  smdk6410 arm s3c64xx smdk6410 samsung s3c6410 
+
+在include目录下:
+ln -s asm-arm asm
+ln -s s3c6410.h regs.h
+ln -s arch-s3c64xx asm-arm/arch
+ln -s proc-armv asm-arm/proc
+生成一个config.mk，内容为：
+ARCH   = arm
+CPU    = s3c64xx
+BOARD  = smdk6410
+VENDOR = samsung
+SOC    = s3c6410
+
+生成一个config.h,内容为：
+/* Automatically generated - do not edit */
+#include <configs/smdk6410.h>
+
+二、编译过程: make
+
+include ./config.mk
+include ./include/config.mk
+
+all:		$(ALL)
+
+
+ALL = $(obj)u-boot.srec $(obj)u-boot.bin $(obj)System.map $(U_BOOT_NAND)
+
+
+$(obj)u-boot.bin:	$(obj)u-boot
+		$(OBJCOPY) ${OBJCFLAGS} -O binary $< $@
+		$(OBJDUMP) -d $< > $<.dis
+
+$(obj)u-boot:		depend version $(SUBDIRS) $(OBJS) $(LIBS) $(LDSCRIPT)
+		UNDEF_SYM=`$(OBJDUMP) -x $(LIBS) |sed  -n -e 's/.*\(__u_boot_cmd_.*\)/-u\1/p'|sort|uniq`;\
+		cd $(LNDIR) && $(LD) $(LDFLAGS) $$UNDEF_SYM $(__OBJS) \
+			--start-group $(__LIBS) --end-group $(PLATFORM_LIBS) \
+			-Map u-boot.map -o u-boot
+
+
+
+
+
+arm-linux-ld -Bstatic -T /share/wei/u-boot/u-boot-1.1.6_smdk6410/board/samsung/smdk6410/u-boot.lds -Ttext 0xc7e00000  $UNDEF_SYM cpu/s3c64xx/start.o \
+                        --start-group lib_generic/libgeneric.a board/samsung/smdk6410/libsmdk6410.a cpu/s3c64xx/libs3c64xx.a cpu/s3c64xx/s3c6410/libs3c6410.a lib_arm/libarm.a fs/cramfs/libcramfs.a fs/fat/libfat.a fs/fdos/libfdos.a fs/jffs2/libjffs2.a fs/reiserfs/libreiserfs.a fs/ext2/libext2fs.a net/libnet.a disk/libdisk.a rtc/librtc.a dtt/libdtt.a drivers/libdrivers.a drivers/nand/libnand.a drivers/nand_legacy/libnand_legacy.a drivers/onenand/libonenand.a drivers/sk98lin/libsk98lin.a post/libpost.a post/cpu/libcpu.a common/libcommon.a --end-group -L /usr/local/arm/4.2.2-eabi/usr/bin-ccache/../lib/gcc/arm-unknown-linux-gnueabi/4.2.2 -lgcc \
+                        -Map u-boot.map -o u-boot
+
+board/samsung/smdk6410/config.mk:28:TEXT_BASE = 0xc7e00000
+                        

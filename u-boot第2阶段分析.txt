@@ -1,0 +1,143 @@
+u-boot的目的：启动内核
+a. 从flash里把内核读到内存里
+b. 启动它
+
+启动信息：
+
+U-Boot 1.1.6 (Jun 13 2011 - 14:07:24) for SMDK6410
+
+****************************************
+**    UT-S3C6410 Nand boot v0.18      **
+**    ShenZhen Urbetter Technology    **
+**    Http://www.urbetter.com         **
+****************************************
+
+CPU:     S3C6410@532MHz
+         Fclk = 532MHz, Hclk = 133MHz, Pclk = 66MHz, Serial = CLKUART (SYNC Mode) 
+Board:   SMDK6410
+DRAM:    128 MB
+
+之前的信息都是init_sequence里面的函数打印的
+
+Flash:   0 kB     // flash_init ==> 识别nor flash, 然后打印display_flash_config
+NAND:    256 MB   // nand_init(); ==> 识别nand flash
+*** Warning - bad CRC or NAND, using default environment
+
+In:      serial
+Out:     serial
+Err:     serial
+Hit any key to stop autoboot:  0 
+
+NAND read: device 0 offset 0x100000, size 0x200000
+ 2097152 bytes read: OK
+## Booting image at c0008000 ...  // do_bootm
+Boot with Image
+
+Starting kernel ...
+
+
+分析：main_loop ()
+
+s = getenv ("bootdelay");
+bootdelay = s ? (int)simple_strtol(s, NULL, 10) : CONFIG_BOOTDELAY;
+          = 3
+          
+s = getenv ("bootcmd");  // s = "nand read 0xc0008000 0x100000 0x200000;bootm 0xc0008000"
+
+/* 倒数过程中，如果有按键按下，则abortboot返回1
+ * 如果一直没有按键按下，则返回0
+ */
+if (bootdelay >= 0 && s && !abortboot (bootdelay)) {
+{
+		/* 如果倒数过程中没有按键 */
+		run_command (s, 0);  // s = "nand read 0xc0008000 0x100000 0x200000;bootm 0xc0008000"
+}
+
+for (;;) {
+	len = readline (CFG_PROMPT);
+	strcpy (lastcommand, console_buffer);
+	rc = run_command (lastcommand, flag);
+	        /* 根据输入的字符串，在“命令数组“里找到对应的"项"
+	         * 执行这个项里面的函数
+	         */
+	
+｝
+
+include/command.h:
+
+#define Struct_Section  __attribute__ ((unused,section (".u_boot_cmd")))
+
+#define U_BOOT_CMD(name,maxargs,rep,cmd,usage,help) \
+cmd_tbl_t __u_boot_cmd_##name Struct_Section = {#name, maxargs, rep, cmd, usage, help}
+
+例子：
+U_BOOT_CMD(
+ 	bootm,	CFG_MAXARGS,	1,	do_bootm,
+ 	"bootm   - boot application image from memory\n",
+ 	"[addr [arg ...]]\n    - boot application image stored in memory\n"
+ 	"\tpassing arguments 'arg ...'; when booting a Linux kernel,\n"
+ 	"\t'arg' can be the address of an initrd image\n"
+);
+
+cmd_tbl_t __u_boot_cmd_bootm __attribute__ ((unused,section (".u_boot_cmd"))) = 
+{"bootm", 
+CFG_MAXARGS, 
+1, 
+do_bootm, 
+"bootm   - boot application image from memory\n", 
+"[addr [arg ...]]\n    - boot application image stored in memory\n"
+ 	"\tpassing arguments 'arg ...'; when booting a Linux kernel,\n"
+ 	"\t'arg' can be the address of an initrd image\n"}
+
+
+分析内核启动过程：
+a. 读内核
+   nand read 0xc0008000 0x100000 0x200000  # cmd_nand.c
+b. 设置参数,启动内核
+   bootm      0xc0008000    # cmd_bootm.c
+   argv[0]    argv[1]
+   重点：do_bootm
+
+do_bootm:
+a. 根据uImage的头部信息，把内核移动到它的加载地址
+b. 设置参数
+c. 跳到内核的入口地址去执行
+   
+do_bootm代码分析: "bootm      0xc0008000"
+addr = simple_strtoul(argv[1], NULL, 16); // addr = 0xc0008000
+memmove (&header, (char *)addr, sizeof(image_header_t)); // 取出uImage的头部
+   
+   
+data = addr + sizeof(image_header_t);  // data指向真正的内核
+len  = ntohl(hdr->ih_size);            // len表示内核的大小
+name = "Kernel Image";
+非压缩
+ih_load = 0x50008000
+data    = 0xc0008000 + 64
+判断能否XIP
+如果不能,移动内核:memmove ((void *) ntohl(hdr->ih_load), (uchar *)data, len);
+
+do_bootm_linux  (cmdtp, flag, argc, argv,
+	     addr, len_ptr, verify);
+
+Armlinux.c (lib_arm):void do_bootm_linux (cmd_tbl_t *cmdtp, int flag, int argc, char *argv[],
+do_bootm_linux分析：
+a. 设置参数
+b. 关MMU
+c. 跳转执行
+
+do_bootm_linux代码阅读：
+#ifdef CONFIG_CMDLINE_TAG
+	char *commandline = getenv ("bootargs"); // 称为"命令行参数"
+#endif
+
+theKernel = (void (*)(int, int, uint))ntohl(hdr->ih_ep); /* 0x50008040 */
+
+设置参数:
+setup_start_tag (bd);
+setup_memory_tags (bd);
+setup_commandline_tag (bd, commandline);
+setup_end_tag (bd);
+
+启动内核(跳到0x50008040去执行):
+theKernel (0, bd->bi_arch_number, bd->bi_boot_params);
