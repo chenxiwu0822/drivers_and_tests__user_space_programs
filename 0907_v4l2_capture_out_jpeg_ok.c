@@ -48,8 +48,9 @@ Step 7: Store data in OpenCV datatype
 #include <sys/mman.h>
 #include <unistd.h>
 
-#define	MJPEG_FILE	"0907_5.jpg"
-
+#define	MJPEG_FILE	"0907_1_1440x1440.jpg"
+#define IMAGE_WIDTH	1440 //ok: 640,700,800,1024,1920
+#define IMAGE_HEIGHT	1440 //ok: 480,500,600,768,1080
 uint8_t *buffer;
 int	size;
 
@@ -115,6 +116,8 @@ static int capture_image(int fd)
 
 	fwrite(buffer, size, 1, fp);
 
+        if (-1 == munmap(buffer, size))
+                printf("%s: munmap error.\n", __func__);
 	return 0;
 }
 
@@ -148,7 +151,7 @@ static int init_mmap(int fd)
 
 	buffer = mmap (NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf.m.offset);
 
-	printf("%s: Length: %d\nAddress: %p\n", __func__, buf.length, buffer);
+	printf("%s: Length: %d	Address: %p\n", __func__, buf.length, buffer);
 	printf("%s: Image Length: %d\n", __func__, buf.bytesused);
 
 	return 0;
@@ -177,8 +180,8 @@ static int init_device(int fd)
 	printf("--------------------\n");
 
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        fmt.fmt.pix.width = 640;
-        fmt.fmt.pix.height = 480;
+        fmt.fmt.pix.width = IMAGE_WIDTH;
+        fmt.fmt.pix.height = IMAGE_HEIGHT;
         //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_BGR24;	//
         //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_GREY;	//
           fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;	//
@@ -266,10 +269,10 @@ int main(int argc, char** argv)
 	if (init_mmap(fd))
 		return 1;
 	
-	for (i = 0; i < 5; i++) {
+	//for (i = 0; i < 5; i++) {
 		if (capture_image(fd))
 			return 1;
-	}
+	//}
 
 	close(fd);
 	return 0;
