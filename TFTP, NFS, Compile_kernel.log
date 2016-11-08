@@ -1,10 +1,12 @@
-﻿编译内核:
+编译:
 tar xjf linux-2.6.28_smdk6410.tar.bz2
 cd linux-2.6.28_smdk6410
 cp smdk6410_config .config
 想进一步调整配置的话,  make menuconfig
-修改内核的顶层Makfile: CROSS_COMPILE   := arm-linux-
 
+修改内核的顶层Makfile: CROSS_COMPILE   := arm-linux-
+                      ARCH = arm
+                      
 把uboot的tools目录下的mkimage拷到系统目录
 cp tools/mkimage /bin/
 
@@ -12,3 +14,6 @@ cp tools/mkimage /bin/
 
 把内核复制到/tftpboot目录
 cp arch/arm/boot/uImage  /tftpboot/
+
+
+//NFS起動
