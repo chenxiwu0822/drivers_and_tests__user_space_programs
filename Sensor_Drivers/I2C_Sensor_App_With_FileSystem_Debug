@@ -14,6 +14,7 @@ void print_usage(char *file)
   printf("%s r addr[MSB] addr[LSB]\n");
   printf("%s w addr[MSB] addr[LSB] val\n");
 }
+
 int main(int argc, char** argv)
 {
   int fd;
