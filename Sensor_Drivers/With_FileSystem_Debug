@@ -1,0 +1,79 @@
+
+
+
+...
+.....
+
+static int major;
+static struct class *cls;
+
+static ssize_t imxOOO_debug_read(struct file *file, char __user *buf, size_t size, loff_t *offset)
+{
+    int ret;
+    struct i2c_msg msg[2];
+    unsigned char data[3];
+    
+    if (size != 1)
+        return -EINVAL;
+    
+    copy_from_user(&data[0], buf, 2);
+    
+    msg[0].addr  = imxOOO_client->addr;
+	  msg[0].buf   = &data;
+	  msg[0].len   = 2;
+	  msg[0].flags = 0;
+
+	  msg[1].addr  = imxOOO_client->addr;
+	  msg[1].buf   = data + 2;
+	  msg[1].len   = 1;
+	  msg[1].flags = I2C_M_RD;
+    
+    ret = i2c_transfer(imxOOO_client->adapter, msg, 2);
+	  if (ret == 2) {
+		  copy_to_user(buf, &data[2], 1);
+		  return 1;
+	  } else
+		  return -EIO;
+}
+
+static ssize_t imxOOO_write(struct file *file, const char __user *buf, size_t size, loff_t *offset)
+{
+	int ret;
+	struct i2c_msg msg;
+  unsigned char data[3];
+ 
+	if (size != 3)
+		return -EINVAL;
+	
+	copy_from_user(&data[0], buf, 3);
+
+	msg[0].addr  = imxOOO_client->addr;
+	msg[0].buf   = data;
+	msg[0].len   = 3;
+	msg[0].flags = 0;
+
+	ret = i2c_transfer(imxOOO_client->adapter, msg, 1);
+	if (ret == 1)
+		return 3;
+	else
+		return -EIO;
+}
+
+....
+......
+static struct file_operations imxOOO_fops = {
+  .owner = THIS_MODULES,
+  .read = imxOOO_debug_read,
+  .write = imxOOO_debug_write,
+};
+...
+.....
+static int imxOOO_probe(struct i2c_client *client, const struct i2c_device_id *id)
+{	
+	major = register_chrdev(0, "imxOOO", &imxOOO_fops);
+
+	cls = class_create(THIS_MODULE, "imxOOO");
+	device_create(cls, NULL, MKDEV(major, 0), NULL, "imxOOO"); /* /dev/imxOOO */
+	
+	return 0;
+}
