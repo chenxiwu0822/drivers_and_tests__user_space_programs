@@ -1,0 +1,45 @@
+/*
+ i2c interface image sensor debug applications
+ shigh1005@gmail.com
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+void print_usage(char *file)
+{
+  printf("%s r addr[MSB] addr[LSB]\n");
+  printf("%s w addr[MSB] addr[LSB] val\n");
+}
+int main(int argc, char** argv)
+{
+  int fd;
+  
+  fd = open("/dev/imx377", O_RDWR);
+  if (fd < 0) {
+      printf("can't open /dev/imx377\n");
+      return -1;
+  }
+  
+  if (strcmp(argv[1], "r") == 0) {
+     unsigned char buf[2];
+     buf[0] = strtoul(argv[2], NULL, 0);
+     buf[1] = strtoul(argv[3], NULL, 0);
+     read (fd, buf, 1);
+     printf("reg data: 0x%x\n", buf[0]);
+  } else if (strcmp(argv[1], "w") == 0) {
+     unsigned char buf[3];
+     buf[0] = strtoul(argv[2], NULL, 0);
+     buf[1] = strtoul(argv[3], NULL, 0);
+     buf[2] = strtoul(argv[4], NULL, 0);
+     write (fd, buf, 3);     
+  } else {
+    print_usage(argv[0]);
+    return -1;
+  }
+  return 0;
+}
