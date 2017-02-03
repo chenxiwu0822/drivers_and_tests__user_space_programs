@@ -1,5 +1,5 @@
 obj-m := second.o   
-KDIR :=/home/bao/biancheng/kernel/opt/EmbedSky/linux-2.6.30.4  
+KDIR :=/home/shi/kernel/opt/EmbedSky/linux-2.6.30.4  
 all:  
     make -C $(KDIR) M=$(shell pwd) modules  
 test:  
