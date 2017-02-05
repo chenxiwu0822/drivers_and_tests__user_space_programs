@@ -1,0 +1,587 @@
+//////////////////////////////////////////////
+Linux下I2C接口触摸屏驱动分析
+//////////////////////////////////////////////
+
+linux下触摸屏驱动的移植主要包括这几个步骤：
+
+    (1)确定触摸屏IC接口，了解对应接口的API函数，注册设备并加入到相应总线上
+    (2)关联设备与驱动，并编写具体的驱动代码
+    (3)熟悉linux输入设备驱动，在驱动代码中分配一个输入设备并初始化相应数据结构，在驱动实现中引用
+
+
+这里对应上面几部分，分析I2C接口下触摸屏驱动的实现。先介绍linux下I2C接口与输入子系统架构，然后基于FT5x0x源码逐层展开整个移植过程的实现。
+
+////////////////////////////////////////////////////
+一、I2C驱动架构
+////////////////////////////////////////////////////
+linux I2C驱动架构
+
+  具体的实现可分为四个层次：
+    1、提供adapter的硬件驱动(控制器)，探测、初始化i2c adapter（如申请i2c的io地址和中断号），驱动soc控制的i2c adapter在硬件上产生信号（start、stop、ack）以及处理i2c中断。覆盖图中的硬件实现层。
+	(不需要我们编写或更改)
+	
+	主要数据结构struct i2c_adapter
+
+		    struct i2c_adapter {    
+			struct module *owner;    
+			unsigned int id;    
+			unsigned int class;    
+			struct i2c_algorithm *algo;/* the algorithm to access the bus   */    
+			void *algo_data;    
+		
+			/* --- administration stuff. */    
+			int (*client_register)(struct i2c_client *);    
+			int (*client_unregister)(struct i2c_client *);    
+		
+			/* data fields that are valid for all devices   */    
+			struct mutex bus_lock;    
+			struct mutex clist_lock;    
+		
+			int timeout;    
+			int retries;    
+			struct device dev;      /* the adapter device */    
+			struct class_device class_dev;  /* the class device */    
+		
+			int nr;    
+			struct list_head clients;    
+			struct list_head list;    
+			char name[I2C_NAME_SIZE];    
+			struct completion dev_released;    
+			struct completion class_dev_released;    
+		    };
+  
+		    这个结构体对应一个控制器。其中包含了控制器名称，algorithm数据，控制器设备等。
+
+
+    2、提供adapter的algorithm，用具体适配器的xxx_xferf()函数来填充i2c_algorithm的master_xfer函数指针，并把赋值后的i2c_algorithm再赋值给i2c_adapter的algo指针。覆盖图中的访问抽象层、i2c核心层。
+   (不需要我们编写或更改)
+
+	主要数据结构struct i2c_algorithm
+
+		    struct i2c_algorithm {    
+			int (*master_xfer)(struct i2c_adapter *adap,struct i2c_msg *msgs,     
+				           int num);    
+			int (*slave_send)(struct i2c_adapter *,char*,int);    
+			int (*slave_recv)(struct i2c_adapter *,char*,int);    
+			u32 (*functionality) (struct i2c_adapter *);    
+		    };   
+
+		    这个结构体中定义了一套控制器使用的通信方法。其中关键函数是master_xfer()。实际工作中很重要一点就是要实现这个函数。
+
+
+    3、实现i2c设备(slave)驱动中的i2c_driver接口，由结构i2c_client中的数据填充，覆盖图中的driver驱动层。主要数据结构
+
+		    struct i2c_client {    
+			unsigned int flags;     /* div., see below      */    
+			unsigned short addr;    /* chip address - NOTE: 7bit    */    
+				        	/* addresses are stored in the _LOWER_ 7 bits */
+			struct i2c_adapter *adapter;    /* the adapter we sit on    */    
+			struct i2c_driver *driver;  	/* and our access routines  */    
+			int usage_count;        /* How many accesses currently to the client */
+			struct device dev;      /* the device structure     */    
+			struct list_head list;    
+			char name[I2C_NAME_SIZE];    
+			struct completion released;    
+		    };  
+
+		    这个结构体中的内容是描述设备的。包含了芯片地址，设备名称，设备使用的中断号，设备所依附的控制器，设备所依附的驱动等内容。
+
+
+    4、实现i2c设备所对应的具体device的驱动。覆盖图中的driver驱动层。主要数据结构struct i2c_driver 
+
+		    struct i2c_driver {    
+			int id;    
+			unsigned int class;    
+		
+			int (*attach_adapter)(struct i2c_adapter *);    
+			int (*detach_adapter)(struct i2c_adapter *);    
+		
+			int (*detach_client)(struct i2c_client *);    
+		
+			int (*command)(struct i2c_client *client,unsigned int cmd, void *arg);    
+			struct device_driver driver;    
+			struct list_head list;    
+		    };  
+
+		    这个结构体对应了驱动方法，重要成员函数有probe，remove，suspend，resume与中断处理函数，也是我们需要是实现的函数。
+		    另外包括一个重要的数据结构: struct i2c_device_id *id_table; 如果驱动可以支持好几个设备，那么这里面就要包含这些设备的ID。
+
+
+    第一层和第二层是i2c总线驱动，属于芯片内部的驱动，在linux驱动架构中已经实现，不需要我们编写或更改。第三第四属于i2c设备驱动，需要我们根据内核提供的接口去完成具体的代码。
+
+
+
+
+    另外就是i2c_core层，起到了承上启下的作用。源代码位于drivers/i2c/i2c-core.c中。在这里可以看到几个重要的函数:
+
+    (1)增加/删除i2c控制器的函数
+	    int i2c_add_adapter(struct i2c_adapter *adapter)    
+	    int i2c_del_adapter(struct i2c_adapter *adap)
+    (2)增加/删除i2c设备的函数
+	    struct i2c_client *i2c_new_device(struct i2c_adapter *adap, struct i2c_board_info const *info);    
+	    void i2c_unregister_device(struct i2c_client *client)
+    (3)增加/删除设备驱动的函数
+	    int i2c_register_driver(struct module *owner, struct i2c_driver *driver)    
+	    void i2c_del_driver(struct i2c_driver *driver)   
+    (4)I2C传输、发送和接收函数
+	    int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num);    
+	    int i2c_master_send(struct i2c_client *client,const char *buf ,int count);    
+	    int i2c_master_recv(struct i2c_client *client, char *buf ,int count);  
+
+	    send和receive分别都调用了transfer函数，而transfer也不是直接和硬件交互，而是调用algorithm中的master_xfer()函数。
+
+
+
+////////////////////////////////////////////////////
+二、linux input输入子系统架构
+////////////////////////////////////////////////////
+
+linux输入系统框架
+
+    linux输入子系统（linux input subsystem）从上到下由三层实现，分别为：输入子系统事件处理层（Event Handler）、输入子系统核心层（Input Core）和输入子系统设备驱动层。这些层次里的具体机制我们先不涉及，而我们要知道输入子系统里有事件处理层，我们完成驱动时很主要的一点就是为输入设备定义一个符合要求的事件集合。另外，在图中可以看出输入设备不止包括触摸屏，还有很多其他种类的输入设备，如键盘，鼠标等等，所以linux内核已经把各式各样的输入设备进行了抽象，提供了统一的接口，让我们把设备接入到系统中。而我们要做的工作就是申请一个输入设备结构体对象，并填充其里面的数据。
+
+
+    把设备注册进输入子系统里一般要经过以下步骤：
+	    1、申请一个输入设备(input_dev)，定义事件集合。关于输入事件的介绍可以看这里：Linux 内核点触摸接口协议
+	    2、上报从设备中读到的数据。可使用函数:
+		    void input_report_key(struct input_dev *dev, unsigned int code, int value); //上报按键事件  
+		    void input_report_rel(struct input_dev *dev, unsigned int code, int value); //上报相对坐标事件  
+		    void input_report_abs(struct input_dev *dev, unsigned int code, int value); //上报绝对坐标事件  
+
+
+
+////////////////////////////////////////////////////
+三、基于OMAP FT5x0x驱动源码分析
+////////////////////////////////////////////////////
+1、板级初始化代码
+
+       板级初始化代码与具体的平台有关，负责相应平台的初始化工作，这里使用的panda board平台的代码，在目录arch/arm/mach-omap2/board-omap4panda.c中。触摸屏设备当然需要在这里先声明并注册进系统。具体代码如下：
+		static struct i2c_board_info __initdata panda_i2c2_boardinfo[] = {
+		    {  
+			I2C_BOARD_INFO("ft5x06_ts", 0x38),  
+			.irq = OMAP_GPIO_IRQ(34),  
+		    },  
+		};  
+
+		omap_register_i2c_bus(2, 100, panda_i2c2_boardinfo,ARRAY_SIZE(panda_i2c2_boardinfo));  
+
+	声明一个i2c_board_info结构的数组，这个数组包含panda board板上i2c接口的信息。先使用宏I2C_BOARD_INFO宏声明设备名为ft5x06_ts，地址为0x38。
+	要说明的是这里的地址并不是指处理器中i2c寄存器的硬件地址，而是在系统加载后，位于/sys/bus/i2c/devices下的设备名。再申请这个i2c接口的中断口为GPIO34，这从板的硬件连接图可以看出。
+
+	然后把这个结构体注册进i2c总线，使用omap_register_i2c_bus函数注册。
+
+2、设备与驱动绑定
+
+    设备与驱动绑定的代码位于目录drivers/input/touchscreen/ft5x0x.c中，这个文件包含了i2c设备的具体代码，以模块的形式编译进内核。
+
+		static const struct i2c_device_id ft5x0x_ts_id[] =  
+		{  
+			{ FT5X0X_NAME, 0 },{ }  
+		};  
+		MODULE_DEVICE_TABLE(i2c, ft5x0x_ts_id);  
+
+		static struct i2c_driver ft5x0x_ts_driver =  
+		{  
+			.probe      = ft5x0x_ts_probe,  
+			.remove     = __devexit_p(ft5x0x_ts_remove),  
+			.id_table   = ft5x0x_ts_id,  
+			.driver = {  
+				    .name   = FT5X0X_NAME,  
+				    .owner  = THIS_MODULE,  
+				  },  
+		};  
+
+		static int __init ft5x0x_ts_init(void)  
+		{
+			return i2c_add_driver(&ft5x0x_ts_driver);  
+		}  
+
+		static void __exit ft5x0x_ts_exit(void)  
+		{  
+			i2c_del_driver(&ft5x0x_ts_driver);  
+		}  
+
+		module_init(ft5x0x_ts_init);  
+		module_exit(ft5x0x_ts_exit);  
+
+		MODULE_AUTHOR("");  
+		MODULE_DESCRIPTION("FocalTech ft5x0x TouchScreen driver");  
+		MODULE_LICENSE("GPL");  
+
+    	首先建立设备与驱动的映射表ft5x0x_ts_id，通过宏MODULE_DEVICE_TABLE关联起来，MODULE_DEVICE_TABLE第一个参数表示这个设备id是i2c总线上了，
+	第二个参数是指设备，当系统找到这个设备时，就会通过FT5X0X_NAME把设备与这个模块关联起来。
+	这是个i2c驱动模块，当然需要定义一个i2c_driver结构体来标识这个驱动，并说明实现的驱动函数有probe()和remove()函数。
+     	之后就是添加模块初始化和退出函数，分别是在模块初始化时调用i2c_add_driver()加入i2c驱动，在模块退出时调用i2c_del_driver删除i2c驱动。
+
+3、设备驱动程序实现
+     从上面i2c_driver结构可以看出，ft5x0x实现了驱动的两个接口函数，分别为probe()和remove()函数。
+     probe()具体实现函数为ft5x0x_ts_probe(),这个函数在内核初始化时，如果设备和驱动匹配，将调用，实现i2c设备的初始化，具体实现：
+
+	static int ft5x0x_ts_probe(struct i2c_client *client, const struct i2c_device_id *id)  
+	{  
+		struct ft5x0x_ts_data *ft5x0x_ts;  
+		struct input_dev *input_dev;  
+		int err = 0;  
+		int rev_id = 0;  
+		  
+		if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {  
+		    err = -ENODEV;  
+		    goto err_out;  
+		}  
+
+		ft5x0x_ts = kzalloc(sizeof(*ft5x0x_ts), GFP_KERNEL);  
+		if (!ft5x0x_ts) {  
+		    err = -ENOMEM;  
+		    goto err_free_mem;  
+		}  
+
+		this_client = client;  
+		    i2c_set_clientdata(client, ft5x0x_ts);  
+
+		rev_id = i2c_smbus_read_byte_data(client, FT5X0X_REG_FT5201ID);  
+		if (rev_id != FT5X06_ID)  
+		{  
+		    err = -ENODEV;  
+		    dev_err(&client->dev, "failed to probe FT5X0X touchscreen device\n");  
+		    goto err_free_mem;  
+		}  
+
+		INIT_WORK(&ft5x0x_ts->pen_event_work, ft5x0x_ts_pen_irq_work);  
+		ft5x0x_ts->ts_workqueue = create_singlethread_workqueue(dev_name(&client->dev));  
+		if (!ft5x0x_ts->ts_workqueue)  
+		{  
+		    err = -ESRCH;  
+		    goto err_free_thread;  
+		}  
+
+		err = request_irq(client->irq, ft5x0x_ts_interrupt, IRQF_DISABLED | IRQF_TRIGGER_RISING, "ft5x0x_ts", ft5x0x_ts);  
+		if (err < 0)  
+		{  
+		    dev_err(&client->dev, "request irq failed\n");  
+		    goto err_free_irq;  
+		}  
+
+		input_dev = input_allocate_device();  
+		if (!input_dev)  
+		{  
+		    err = -ENOMEM;  
+		    dev_err(&client->dev, "failed to allocate input device\n");  
+		    goto err_free_input;  
+		}  
+		  
+		ft5x0x_ts->input_dev = input_dev;  
+
+	#ifdef CONFIG_FT5X0X_MULTITOUCH  
+		set_bit(ABS_MT_TOUCH_MAJOR, input_dev->absbit);  
+		set_bit(ABS_MT_POSITION_X, input_dev->absbit);  
+		set_bit(ABS_MT_POSITION_Y, input_dev->absbit);  
+		set_bit(ABS_MT_WIDTH_MAJOR, input_dev->absbit);  
+		set_bit(ABS_PRESSURE, input_dev->absbit);  
+
+		input_set_abs_params(input_dev, ABS_MT_POSITION_X, 0, SCREEN_MAX_X, 0, 0);  
+		input_set_abs_params(input_dev, ABS_MT_POSITION_Y, 0, SCREEN_MAX_Y, 0, 0);  
+		input_set_abs_params(input_dev, ABS_MT_TOUCH_MAJOR, 0, PRESS_MAX, 0, 0);  
+		input_set_abs_params(input_dev, ABS_MT_WIDTH_MAJOR, 0, 200, 0, 0);  
+	#else  
+		set_bit(ABS_X, input_dev->absbit);  
+		set_bit(ABS_Y, input_dev->absbit);  
+		set_bit(ABS_PRESSURE, input_dev->absbit);  
+		set_bit(BTN_TOUCH, input_dev->keybit);  
+
+		input_set_abs_params(input_dev, ABS_X, 0, SCREEN_MAX_X, 0, 0);  
+		input_set_abs_params(input_dev, ABS_Y, 0, SCREEN_MAX_Y, 0, 0);  
+		input_set_abs_params(input_dev, ABS_PRESSURE, 0, PRESS_MAX, 0 , 0);  
+	#endif  
+
+		set_bit(EV_ABS, input_dev->evbit);  
+		set_bit(EV_KEY, input_dev->evbit);  
+
+		input_dev->name  = FT5X0X_NAME;  
+		err = input_register_device(input_dev);  
+		if (err) {  
+		    dev_err(&client->dev, "failed to register input device: %s\n",  
+		    dev_name(&client->dev));  
+		    goto err_free_input;  
+		}  
+
+	#ifdef CONFIG_HAS_EARLYSUSPEND  
+		ft5x0x_ts->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;  
+		ft5x0x_ts->early_suspend.suspend = ft5x0x_ts_suspend;  
+		ft5x0x_ts->early_suspend.resume  = ft5x0x_ts_resume;  
+		register_early_suspend(&ft5x0x_ts->early_suspend);  
+	#endif  
+
+		return 0;  
+
+		err_free_input:  
+			input_free_device(input_dev);  
+		err_free_irq:  
+			free_irq(client->irq, ft5x0x_ts);  
+		err_free_thread:  
+			cancel_work_sync(&ft5x0x_ts->pen_event_work);  
+			destroy_workqueue(ft5x0x_ts->ts_workqueue);  
+			i2c_set_clientdata(client, NULL);  
+		err_free_mem:  
+			kfree(ft5x0x_ts);  
+		err_out:  
+			return err;  
+	}  
+
+	这个函数代码比较长，但是可以分部分去看，每一部分对应不同的初始化工作.大概可以分为这几个部分：
+	    (1)检测适配器是否支持I2C_FUNC_I2C的通信方式 ：i2c_check_functionality(client->adapter, I2C_FUNC_I2C)
+	    (2)申请内存存储驱动的数据：ft5x0x_ts = kzalloc(sizeof(*ft5x0x_ts), GFP_KERNEL)；并把驱动数据赋值给系统传过来的i2c_client数据：this_client = client; i2c_set_clientdata(client, ft5x0x_ts);
+	    (3)验证将要通信的设备ID：rev_id = i2c_smbus_read_byte_data(client, FT5X0X_REG_FT5201ID);
+	    (4)创建触摸事件的工作队列并初始化工作队列的处理函数：INIT_WORK(&ft5x0x_ts->pen_event_work, ft5x0x_ts_pen_irq_work); 
+							      ft5x0x_ts->ts_workqueue = create_singlethread_workqueue(dev_name(&client->dev));
+	    (5)申请系统中断并声明中断处理函数: request_irq(client->irq, ft5x0x_ts_interrupt, IRQF_DISABLED | IRQF_TRIGGER_RISING, "ft5x0x_ts", ft5x0x_ts);
+	    (6)分配一个输入设备实例，初始化数据并注册进系统：input_dev = input_allocate_device(); input_register_device(input_dev);
+	    (7)如果定义了earlysuspend，声明其处理函数。earlysuspend用于对触摸屏类设备的电源管理，降低功耗。
+	    (8)最后对执行过程中可能出现的错误进行处理。
+
+
+    当有触摸动作时，触摸屏将会执行(5)中声明的中断处理函数ft5x0x_ts_interrupt，具体实现：
+
+	    static irqreturn_t ft5x0x_ts_interrupt(int irq, void *dev_id)
+	    {  
+		struct ft5x0x_ts_data *ft5x0x_ts = dev_id;  
+	      
+		if (!work_pending(&ft5x0x_ts->pen_event_work))  
+		    queue_work(ft5x0x_ts->ts_workqueue, &ft5x0x_ts->pen_event_work);  
+	      
+		return IRQ_HANDLED;  
+	    }  
+
+    可以看到，中断处理就是在判断工作队列在没有被挂起的情况下在触摸时间加入到工作队列中去，等待工作队列处理函数ft5x0x_ts_pen_irq_work()的处理。
+    ft5x0x_ts_pen_irq_work()的实现：
+    static void ft5x0x_ts_pen_irq_work(struct work_struct *work)  
+    {  
+        int ret = -1;  
+      
+        ret = ft5x0x_read_data();  
+      
+        if (ret == 0)
+            ft5x0x_report_value();  
+    }
+
+
+    概括来说这里只做了两件事： 从设备中读取数据; 把数据上报到输入子系统中。
+    /////////////
+    (1)从设备中读取数据由函数ft5x0x_read_data()实现:
+    /////////////
+	    static int ft5x0x_read_data(void)  
+	    {  
+		struct ft5x0x_ts_data *data = i2c_get_clientdata(this_client);  
+		struct ts_event *event = &data->event;  
+		u8 buf[32] = {0};  
+		int ret = -1;  
+		int status = 0;  
+	      
+	    #ifdef CONFIG_FT5X0X_MULTITOUCH  
+		ret = ft5x0x_i2c_rxdata(buf, 31);  
+	    #else  
+		ret = ft5x0x_i2c_rxdata(buf, 7);  
+	    #endif
+
+		if (ret < 0)  
+		{  
+		    printk("%s read_data i2c_rxdata failed: %d\n", __func__, ret);  
+		    return ret;  
+		}  
+	      
+		memset(event, 0, sizeof(struct ts_event));  
+		event->touch_point = buf[2] & 0x07;  
+	      
+		if (event->touch_point == 0)  
+		{  
+		    ft5x0x_ts_inactivate();  
+		    return 1;   
+		}  
+	      
+	    #ifdef CONFIG_FT5X0X_MULTITOUCH  
+		switch (event->touch_point)  
+		{  
+		    case 5:  
+		        event->x5 = (s16)(buf[0x1b] & 0x0F)<<8 | (s16)buf[0x1c];  
+		        event->y5 = (s16)(buf[0x1d] & 0x0F)<<8 | (s16)buf[0x1e];  
+		        status = (s16)((buf[0x1b] & 0xc0) >> 6);  
+		        event->touch_ID5=(s16)(buf[0x1D] & 0xF0)>>4;  
+		        if (status == 1) ft5x0x_ts_release();  
+	      
+		    case 4:  
+		        event->x4 = (s16)(buf[0x15] & 0x0F)<<8 | (s16)buf[0x16];  
+		        event->y4 = (s16)(buf[0x17] & 0x0F)<<8 | (s16)buf[0x18];  
+		        status = (s16)((buf[0x15] & 0xc0) >> 6);  
+		        event->touch_ID4=(s16)(buf[0x17] & 0xF0)>>4;  
+		        if (status == 1) ft5x0x_ts_release();  
+	      
+		    case 3:  
+		        event->x3 = (s16)(buf[0x0f] & 0x0F)<<8 | (s16)buf[0x10];  
+		        event->y3 = (s16)(buf[0x11] & 0x0F)<<8 | (s16)buf[0x12];  
+		        status = (s16)((buf[0x0f] & 0xc0) >> 6);  
+		        event->touch_ID3=(s16)(buf[0x11] & 0xF0)>>4;  
+		        if (status == 1) ft5x0x_ts_release();  
+	      
+		    case 2:  
+		        event->x2 = (s16)(buf[9] & 0x0F)<<8 | (s16)buf[10];  
+		        event->y2 = (s16)(buf[11] & 0x0F)<<8 | (s16)buf[12];  
+		        status = (s16)((buf[0x9] & 0xc0) >> 6);  
+		        event->touch_ID2=(s16)(buf[0x0b] & 0xF0)>>4;  
+		        if (status == 1) ft5x0x_ts_release();  
+	      
+		    case 1:  
+		        event->x1 = (s16)(buf[3] & 0x0F)<<8 | (s16)buf[4];  
+		        event->y1 = (s16)(buf[5] & 0x0F)<<8 | (s16)buf[6];  
+		        status = (s16)((buf[0x3] & 0xc0) >> 6);  
+		        event->touch_ID1=(s16)(buf[0x05] & 0xF0)>>4;  
+		        if (status == 1) ft5x0x_ts_release();  
+		                break;  
+	      
+		    default:  
+		        return -1;  
+		}  
+	    #else  
+		if (event->touch_point == 1)  
+		{  
+		    event->x1 = (s16)(buf[3] & 0x0F)<<8 | (s16)buf[4];  
+		    event->y1 = (s16)(buf[5] & 0x0F)<<8 | (s16)buf[6];  
+		}  
+	    #endif  
+		event->pressure = 200;  
+	      
+		dev_dbg(&this_client->dev, "%s: 1:%d %d 2:%d %d \n", __func__,  
+		    event->x1, event->y1, event->x2, event->y2);  
+	      
+		return 0;  
+	    }  
+
+	    从设备中读取数据使用ft5x0x_i2c_rxdata()函数:
+
+	    static int ft5x0x_i2c_rxdata(char *rxdata, int length)	//length = 31 or 7
+	    {  
+		int ret;  
+	      
+		struct i2c_msg msgs[] =  //其中addr为从机地址；flags则是这次通信的标志，发送数据为0，接收数据则为 I2C_M_RD; len为此次通信的数据字节数; buf为发送或接收数据的指针.
+		{  
+		    {  
+		        .addr   = this_client->addr,  
+		        .flags  = 0,
+		        .len    = 1,  
+		        .buf    = rxdata,
+		    },  
+		    {  
+		        .addr   = this_client->addr,  
+		        .flags  = I2C_M_RD,	//re
+		        .len    = length,  
+		        .buf    = rxdata,  
+		    },
+		};  
+	      
+		ret = i2c_transfer(this_client->adapter, msgs, 2);  
+		if (ret < 0)  
+		    pr_err("msg %s i2c read error: %d\n", __func__, ret);  
+		  
+		return ret;  
+	    }  
+
+	    这个函数里面会构建一个i2c_msg msg结构去调用i2c_transfer()函数读取数据，在前面已经说过，i2c_transfer()函数最终调用的就是i2c_algorithm中master_xfer()函数进行实际的数据传输，这个函数在adapter驱动中实现。
+	    对[读取到的数据处理]涉及到IC里面的[数据格式]，查找Touch Screen芯片的数据手册可以看到寄存器的数据分步。
+
+
+	ft5x0x寄存器映射表: ...
+	    这里为缩小篇幅，只截取一部分寄存器，其余寄存器格式可参照既给出的寄存器信息。 结合图片可以看出，代码先根据是否多点触摸，从寄存器读取数据长度，
+	    若是只需要单点触摸就读取7个字节信息，
+            若是多点触摸，就读取31个字节的信息， 从代码可以看出最多支持五点触摸。
+            读出信息的第三个字节的低4位为触摸点数，所以event->touch_point = buf[2] & 0x07;
+            判断触摸点数之后,便分别计算触摸点的坐标，这里以第一个点为例，其余点可以依此类推。
+		第一个点的坐标信息包含在地址03h～06h中，坐标信息由12bit组成，分布在两个字节中，另外还包含flag标志信息，用于表示触摸点的状态，还包含触摸点的ID(touch_IDx)识别。
+
+
+
+
+
+    /////////////
+    (2)把数据上报到输入子系统中由函数ft5x0x_report_value()实现
+    /////////////
+
+    static void ft5x0x_report_value(void)  
+    {  
+        struct ft5x0x_ts_data *data = i2c_get_clientdata(this_client);  
+        struct ts_event *event = &data->event;  
+      
+    #ifdef CONFIG_FT5X0X_MULTITOUCH  
+        switch(event->touch_point)  
+        {  
+            case 5:  
+                input_report_abs(data->input_dev, ABS_MT_TRACKING_ID, event->touch_ID5);  
+                input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, event->pressure);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_X, SCREEN_MAX_X - event->x5);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_Y, event->y5);  
+                input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, 1);  
+                input_mt_sync(data->input_dev);  
+            case 4:  
+                input_report_abs(data->input_dev, ABS_MT_TRACKING_ID, event->touch_ID4);  
+                input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, event->pressure);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_X, SCREEN_MAX_X - event->x4);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_Y, event->y4);  
+                input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, 1);  
+                input_mt_sync(data->input_dev);  
+            case 3:  
+                input_report_abs(data->input_dev, ABS_MT_TRACKING_ID, event->touch_ID3);  
+                input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, event->pressure);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_X, SCREEN_MAX_X - event->x3);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_Y, event->y3);  
+                input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, 1);  
+                input_mt_sync(data->input_dev);  
+            case 2:  
+                input_report_abs(data->input_dev, ABS_MT_TRACKING_ID, event->touch_ID2);  
+                input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, event->pressure);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_X, SCREEN_MAX_X - event->x2);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_Y, event->y2);  
+                input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, 1);  
+                input_mt_sync(data->input_dev);  
+            case 1:  
+                input_report_abs(data->input_dev, ABS_MT_TRACKING_ID, event->touch_ID1);  
+                input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, event->pressure);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_X, SCREEN_MAX_X - event->x1);  
+                input_report_abs(data->input_dev, ABS_MT_POSITION_Y, event->y1);  
+                input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, 1);  
+                input_mt_sync(data->input_dev);  
+            default:  
+                break;  
+        }  
+    #else   /* CONFIG_FT5X0X_MULTITOUCH*/  
+        if (event->touch_point == 1)  
+        {  
+            input_report_abs(data->input_dev, ABS_X, SCREEN_MAX_X - event->x1);  
+            input_report_abs(data->input_dev, ABS_Y, event->y1);  
+            input_report_abs(data->input_dev, ABS_PRESSURE, event->pressure);  
+        }  
+        input_report_key(data->input_dev, BTN_TOUCH, 1);  
+    #endif  /* CONFIG_FT5X0X_MULTITOUCH*/  
+        input_sync(data->input_dev);  
+      
+        dev_dbg(&this_client->dev, "%s: 1:%d %d 2:%d %d \n", __func__,  
+            event->x1, event->y1, event->x2, event->y2);  
+    }  
+
+    因为触摸屏使用的是绝对坐标系，上报数据使用input_report_abs()函数，参数要注意选择合适的事件集。上报玩数据要记得同步，使用input_mt_sync()表示单个手指信息结束，使用input_sync()表示整个触摸动作的结束。
+
+    remove()函数的具体实现是ft5x0x_ts_remove(),做与probe()相反的工作，释放内存。
+
+
+    static int __devexit ft5x0x_ts_remove(struct i2c_client *client)  
+    {  
+        struct ft5x0x_ts_data *ft5x0x_ts = i2c_get_clientdata(client);  
+      
+        unregister_early_suspend(&ft5x0x_ts->early_suspend);  
+        free_irq(client->irq, ft5x0x_ts);  
+        input_unregister_device(ft5x0x_ts->input_dev);  
+        kfree(ft5x0x_ts);  
+        cancel_work_sync(&ft5x0x_ts->pen_event_work);  
+        destroy_workqueue(ft5x0x_ts->ts_workqueue);  
+        i2c_set_clientdata(client, NULL);  
+      
+        return 0;  
+    }  
+
+    至此，我们从i2c接口及输入子系统的接口清楚了整个触摸屏驱动的结构，并详细分析了触摸屏驱动中的具体实现。
