@@ -8,7 +8,7 @@
 #include <errno.h>
 #include <string.h>
 
-/* セルの定義 */
+/*  */
 struct cell{
     struct cell *next;
     int data;
@@ -20,8 +20,7 @@ typedef struct cell cell_t;
  * @param[in]   data  データ
  * @return      新規セルのアドレスを返す。失敗の場合はNULLを返す。
  */
-cell_t *
-list_alloc(int data)
+cell_t *list_alloc(int data)
 {
     cell_t *new = NULL;
 
@@ -42,8 +41,7 @@ list_alloc(int data)
  * @param[in]  header  リストの先頭要素
  * @param[in]  data  データ
  */
-int
-list_add(cell_t *header, int data)
+int list_add(cell_t *header, int data)
 {
     cell_t *next = NULL;
     cell_t *prev = header;
@@ -65,8 +63,7 @@ list_add(cell_t *header, int data)
  * @brief      リストの要素を全て解放する
  * @param[in]  header  リストの先頭要素
  */
-void
-list_free(cell_t *header)
+void list_free(cell_t *header)
 {
     cell_t *temp = header;
     cell_t *swap = NULL;
@@ -82,8 +79,7 @@ list_free(cell_t *header)
  * @brief      リストの要素を一覧表示する
  * @param[in]  header  リストの先頭要素
  */
-static void
-list_print(cell_t *header)
+static void list_print(cell_t *header)
 {
     cell_t *p = header;
 
@@ -101,7 +97,8 @@ int main(void)
 
     /* 先頭セルを用意する */
     cell_t *header = list_alloc(0);
-    if(header == NULL) return(-1);
+    if(header == NULL)
+        return(-1);
 
     /* 要素を追加する */
     for(cnt = 1; cnt < 10; cnt++){
