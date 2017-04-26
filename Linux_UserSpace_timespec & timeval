@@ -18,14 +18,17 @@ time_t time(time_t * timer)
 一、struct timespec 定义：
 
 typedef long time_t;
-#ifndef _TIMESPEC
-#define _TIMESPEC
-struct timespec {
-time_t tv_sec; // seconds 
-long tv_nsec; // and nanoseconds 
-};
+     #ifndef _TIMESPEC
+     #define _TIMESPEC
+     struct timespec {
+          time_t tv_sec; // seconds 
+          long tv_nsec; // and nanoseconds 
+     };
 #endif
+
 struct timespec有两个成员，一个是秒，一个是纳秒, 所以最高精确度是纳秒。
+
+
 一般由函数int clock_gettime(clockid_t, struct timespec *)获取特定时钟的时间，常用如下4种时钟：
 CLOCK_REALTIME 统当前时间，从1970年1.1日算起
 CLOCK_MONOTONIC 系统的启动时间，不能被设置
@@ -51,10 +54,10 @@ int tz_dsttime; //type of DST correction
 struct timeval有两个成员，一个是秒，一个是微秒, 所以最高精确度是微秒。
 一般由函数int gettimeofday(struct timeval *tv, struct timezone *tz)获取系统的时间 
 
+
+
+
 三、 对照样例：
-
-
-复制代码
  1 #include<stdio.h>
  2 #include<time.h>
  3 #include<sys/time.h>
