@@ -6,33 +6,21 @@ struct timespec 和 struct timeval
   #include <stdio.h> 
   #include <stdlib.h> /* 包含标准库头文件 */ 
   #include <sys/time.h> 
-    
-  int main(int argc, char **argv) 
-  { 
-  struct timeval start,stop,diff; 
-  gettimeofday(&start,0); 
-                    //做你要做的事... 
-  gettimeofday(&stop,0); 
-  timeval_subtract(&diff,&start,&stop); 
-                    printf("总计用时:%d 微秒\n",diff.tv_usec); 
-  } 
-    
+  
   /** 
-      * 计算两个时间的间隔，得到时间差 
-      * @param struct timeval* resule 返回计算出来的时间 
-      * @param struct timeval* x 需要计算的前一个时间 
-      * @param struct timeval* y 需要计算的后一个时间 
-      * return -1 failure ,0 success 
-  **/ 
+  * 计算两个时间的间隔，得到时间差 
+  * @param struct timeval* resule 返回计算出来的时间 
+  * @param struct timeval* x 需要计算的前一个时间 
+  * @param struct timeval* y 需要计算的后一个时间 
+  * return -1 failure ,0 success 
+  **/
   int timeval_subtract(struct timeval* result, struct timeval* x, struct timeval* y) 
   { 
-        int nsec; 
-    
         if ( x->tv_sec>y->tv_sec ) 
-                  return -1; 
+              return -1; 
     
         if ( (x->tv_sec==y->tv_sec) && (x->tv_usec>y->tv_usec) ) 
-                  return -1; 
+              return -1; 
     
         result->tv_sec = ( y->tv_sec-x->tv_sec ); 
         result->tv_usec = ( y->tv_usec-x->tv_usec ); 
@@ -44,7 +32,21 @@ struct timespec 和 struct timeval
         } 
     
         return 0; 
-  }
+  } 
+  
+  int main(int argc, char **argv) 
+  { 
+      struct timeval start,stop,diff;
+
+      gettimeofday(&start,0); 
+       //... 
+      gettimeofday(&stop,0); 
+
+      timeval_subtract(&diff,&start,&stop); 
+      printf("总计用时: %d 微秒\n",diff.tv_usec); 
+  } 
+    
+
   
   
   
