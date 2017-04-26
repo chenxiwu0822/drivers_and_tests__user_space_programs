@@ -1,0 +1,113 @@
+struct timespec 和 struct timeval
+
+
+
+ 
+
+time()提供了秒级的精确度 .
+
+1、头文件 <time.h> 
+2、函数原型 
+time_t time(time_t * timer) 
+函数返回从TC1970-1-1 0:0:0开始到现在的秒数 
+
+用time()函数结合其他函数（如：localtime、gmtime、asctime、ctime）可以获得当前系统时间或是标准时间。
+
+如果需要更高的时间精确度，就需要struct timespec 和 struct timeval来处理：
+
+一、struct timespec 定义：
+
+typedef long time_t;
+#ifndef _TIMESPEC
+#define _TIMESPEC
+struct timespec {
+time_t tv_sec; // seconds 
+long tv_nsec; // and nanoseconds 
+};
+#endif
+struct timespec有两个成员，一个是秒，一个是纳秒, 所以最高精确度是纳秒。
+一般由函数int clock_gettime(clockid_t, struct timespec *)获取特定时钟的时间，常用如下4种时钟：
+CLOCK_REALTIME 统当前时间，从1970年1.1日算起
+CLOCK_MONOTONIC 系统的启动时间，不能被设置
+CLOCK_PROCESS_CPUTIME_ID 本进程运行时间
+CLOCK_THREAD_CPUTIME_ID 本线程运行时间
+struct tm *localtime(const time_t *clock);  //线程不安全
+struct tm* localtime_r( const time_t* timer, struct tm* result );//线程安全
+size_t strftime (char* ptr, size_t maxsize, const char* format,const struct tm* timeptr );
+
+ 
+
+二、struct timeval 定义：
+
+struct timeval {
+time_t tv_sec; // seconds 
+long tv_usec; // microseconds 
+};
+struct timezone{ 
+int tz_minuteswest; //miniutes west of Greenwich 
+int tz_dsttime; //type of DST correction 
+};
+
+struct timeval有两个成员，一个是秒，一个是微秒, 所以最高精确度是微秒。
+一般由函数int gettimeofday(struct timeval *tv, struct timezone *tz)获取系统的时间 
+
+三、 对照样例：
+
+
+复制代码
+ 1 #include<stdio.h>
+ 2 #include<time.h>
+ 3 #include<sys/time.h>
+ 4 
+ 5 void nowtime_ns()
+ 6 {
+ 7     printf("---------------------------struct timespec---------------------------------------\n"); 
+ 8     printf("[time(NULL)]     :     %ld\n", time(NULL)); 
+ 9     struct timespec ts;
+10     clock_gettime(CLOCK_REALTIME, &ts);
+11     printf("clock_gettime : tv_sec=%ld, tv_nsec=%ld\n", ts.tv_sec, ts.tv_nsec);
+12     
+13     struct tm t;
+14     char date_time[64];
+15     strftime(date_time, sizeof(date_time), "%Y-%m-%d %H:%M:%S", localtime_r(&ts.tv_sec, &t));
+16     printf("clock_gettime : date_time=%s, tv_nsec=%ld\n", date_time, ts.tv_nsec);
+17 }
+18 void nowtime_us()
+19 {
+20     printf("---------------------------struct timeval----------------------------------------\n"); 
+21     printf("[time(NULL)]    :    %ld\n", time(NULL)); 
+22     struct timeval us;
+23     gettimeofday(&us,NULL);
+24     printf("gettimeofday: tv_sec=%ld, tv_usec=%ld\n", us.tv_sec, us.tv_usec);
+25     
+26     struct tm t;
+27     char date_time[64];
+28     strftime(date_time, sizeof(date_time), "%Y-%m-%d %H:%M:%S", localtime_r(&us.tv_sec, &t));
+29     printf("gettimeofday: date_time=%s, tv_usec=%ld\n", date_time, us.tv_usec);
+30 }
+31 
+32 int main(int argc, char* argv[])
+33 {
+34     nowtime_ns();
+35     printf("\n");
+36     nowtime_us();
+37     printf("\n");
+38     return 0;
+39 }
+
+
+执行结果：
+
+$tt
+---------------------------struct timespec---------------------------------------
+[time(NULL)] : 1400233995
+clock_gettime : tv_sec=1400233995, tv_nsec=828222000
+clock_gettime : date_time=2014-05-16 17:53:15, tv_nsec=828222000
+
+---------------------------struct timeval----------------------------------------
+[time(NULL)] : 1400233995
+gettimeofday: tv_sec=1400233995, tv_usec=828342
+gettimeofday: date_time=2014-05-16 17:53:15, tv_usec=828342
+
+
+ 
