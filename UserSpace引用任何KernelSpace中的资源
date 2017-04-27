@@ -1,0 +1,38 @@
+用户空间(userspace)引用jiffies
+
+此方法可以推广，用以引用任何内核中的资源。
+
+
+
+#include <stdio.h>  
+#include <sys/mman.h>  
+#include <sys/types.h>  
+#include <sys/stat.h>  
+#include <fcntl.h>  
+  
+  
+int main (int argc, char* argv[])  
+{
+    /* 0xc06e1740 is from /boot/System.map-2.6.xx  嵌入式环境也可以使用 
+         c06e1740 D jiffies  
+    */
+    
+    unsigned long offset = 0xc06e1740; 
+
+    offset -= 0xc0000000;  
+  
+    int fd;  
+    fd = open("/dev/mem", O_RDONLY);  
+  
+    void *p;  
+    p = mmap(0, 0x10000, PROT_READ, MAP_SHARED, fd, (off_t)(offset - offset%0x10000));  
+  
+    volatile unsigned long *pJiffies;  
+    pJiffies = (volatile unsigned long *)((char *)p + offset%0x10000);  
+      
+    int i;  
+    for (i = 0; i < 1000; i++)  
+    {  
+     printf ("jiffies = %ul\n",(unsigned long)(*pJiffies));  
+    }  
+} 
